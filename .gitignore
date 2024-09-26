@@ -1,0 +1,15 @@
+# Project stuff
+/Test-Download-Dir/
+/Test-AppData-Dir/
+/AppData/
+/Downloads/
+
+# Python cache
+__pycache__
+# venv
+.venv
+venv
+# vscode
+.vscode
+# pycharm
+.idea
