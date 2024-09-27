@@ -19,6 +19,7 @@ class SimpCityCrawler(Crawler):
     def __init__(self, manager: Manager):
         super().__init__(manager, "simpcity", "SimpCity")
         self.primary_base_domain = URL("https://simpcity.su")
+        self.secondary_base_domain = URL("https://sexyforums.com")
         self.logged_in = False
         self.login_attempts = 0
         self.request_limiter = AsyncLimiter(10, 1)
@@ -48,35 +49,40 @@ class SimpCityCrawler(Crawler):
         self.attachments_selector = "a"
         self.attachments_attribute = "href"
 
+    def get_base_domain(self, url: URL) -> URL:
+        return self.secondary_base_domain if self.secondary_base_domain.host in url.host else self.primary_base_domain
+
     """~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"""
 
     async def fetch(self, scrape_item: ScrapeItem) -> None:
         """Determines where to send the scrape item based on the url"""
         task_id = await self.scraping_progress.add_task(scrape_item.url)
-
-        if not self.logged_in and self.login_attempts == 0:
-            login_url = self.primary_base_domain / "login"
+        try:
+            base_domain = self.get_base_domain(scrape_item.url)
+            login_url = base_domain / "login"
             session_cookie = self.manager.config_manager.authentication_data['Forums']['simpcity_xf_user_cookie']
             username = self.manager.config_manager.authentication_data['Forums']['simpcity_username']
             password = self.manager.config_manager.authentication_data['Forums']['simpcity_password']
             wait_time = 5
 
-            if session_cookie or (username and password):
-                self.login_attempts += 1
-                await self.forum_login(login_url, session_cookie, username, password, wait_time)
+            if not self.logged_in and self.login_attempts == 0:
+                if session_cookie or (username and password):
+                    self.login_attempts += 1
+                    await self.forum_login(login_url, session_cookie, username, password, wait_time)
 
-        if not self.logged_in and self.login_attempts == 1:
-            await log("SimpCity login failed. Scraping without an account.", 40)
+            if not self.logged_in and self.login_attempts == 1:
+                await log("SimpCity login failed. Scraping without an account.", 40)
 
-        await self.forum(scrape_item)
-
-        await self.scraping_progress.remove_task(task_id)
+            await self.forum(scrape_item)
+        except Exception as e:
+            await log(f"Error in fetch method: {e}", 40)
+        finally:
+            await self.scraping_progress.remove_task(task_id)
 
     @error_handling_wrapper
     async def forum(self, scrape_item: ScrapeItem) -> None:
         """Scrapes an album"""
         continue_scraping = True
-
         thread_url = scrape_item.url
         post_number = 0
         if len(scrape_item.url.parts) > 3:
@@ -87,46 +93,50 @@ class SimpCityCrawler(Crawler):
 
         current_post_number = 0
         while True:
-            async with self.request_limiter:
-                soup = await self.client.get_BS4(self.domain, thread_url)
+            try:
+                async with self.request_limiter:
+                    soup = await self.client.get_BS4(self.domain, thread_url)
 
-            title_block = soup.select_one(self.title_selector)
-            for elem in title_block.find_all(self.title_trash_selector):
-                elem.decompose()
+                title_block = soup.select_one(self.title_selector)
+                for elem in title_block.find_all(self.title_trash_selector):
+                    elem.decompose()
 
-            thread_id = thread_url.parts[2].split('.')[-1]
-            title = await self.create_title(title_block.text.replace("\n", ""), None, thread_id)
+                thread_id = thread_url.parts[2].split('.')[-1]
+                title = await self.create_title(title_block.text.replace("\n", ""), None, thread_id)
 
-            posts = soup.select(self.posts_selector)
-            for post in posts:
-                current_post_number = int(post.select_one(self.posts_number_selector).get(self.posts_number_attribute).split('/')[-1].split('post-')[-1])
-                scrape_post, continue_scraping = await self.check_post_number(post_number, current_post_number)
+                posts = soup.select(self.posts_selector)
+                for post in posts:
+                    current_post_number = int(post.select_one(self.posts_number_selector).get(self.posts_number_attribute).split('/')[-1].split('post-')[-1])
+                    scrape_post, continue_scraping = await self.check_post_number(post_number, current_post_number)
 
-                if scrape_post:
-                    try:
-                        date = int(post.select_one(self.post_date_selector).get(self.post_date_attribute))
-                    except:
-                        pass
-                    new_scrape_item = await self.create_scrape_item(scrape_item, thread_url, title, False, None, date)
+                    if scrape_post:
+                        date = None  # Initialize date to None
+                        try:
+                            date = int(post.select_one(self.post_date_selector).get(self.post_date_attribute))
+                        except:
+                            pass
+                        new_scrape_item = await self.create_scrape_item(scrape_item, thread_url, title, False, None, date)
 
-                    # for elem in post.find_all(self.quotes_selector):
-                    #     elem.decompose()
-                    post_content = post.select_one(self.posts_content_selector)
-                    await self.post(new_scrape_item, post_content, current_post_number)
+                        post_content = post.select_one(self.posts_content_selector)
+                        await self.post(new_scrape_item, post_content, current_post_number)
 
-                if not continue_scraping:
+                    if not continue_scraping:
+                        break
+
+                next_page = soup.select_one(self.next_page_selector)
+                if next_page and continue_scraping:
+                    thread_url = next_page.get(self.next_page_attribute)
+                    if thread_url:
+                        if thread_url.startswith("/"):
+                            thread_url = self.get_base_domain(scrape_item.url) / thread_url[1:]
+                        thread_url = URL(thread_url)
+                        continue
+                else:
                     break
-
-            next_page = soup.select_one(self.next_page_selector)
-            if next_page and continue_scraping:
-                thread_url = next_page.get(self.next_page_attribute)
-                if thread_url:
-                    if thread_url.startswith("/"):
-                        thread_url = self.primary_base_domain / thread_url[1:]
-                    thread_url = URL(thread_url)
-                    continue
-            else:
+            except Exception as e:
+                await log(f"Error in forum method: {e}", 40)
                 break
+
         post_string = f"post-{current_post_number}"
         if "page-" in scrape_item.url.raw_name or "post-" in scrape_item.url.raw_name:
             last_post_url = scrape_item.url.parent / post_string
@@ -168,11 +178,11 @@ class SimpCityCrawler(Crawler):
             if link.startswith("//"):
                 link = "https:" + link
             elif link.startswith("/"):
-                link = self.primary_base_domain / link[1:]
+                link = self.get_base_domain(scrape_item.url) / link[1:]
             link = URL(link)
 
             try:
-                if self.domain not in link.host:
+                if self.primary_base_domain.host not in link.host and self.secondary_base_domain.host not in link.host:
                     new_scrape_item = await self.create_scrape_item(scrape_item, link, "")
                     await self.handle_external_links(new_scrape_item)
                 elif self.attachment_url_part in link.parts:
@@ -203,10 +213,10 @@ class SimpCityCrawler(Crawler):
             if link.startswith("//"):
                 link = "https:" + link
             elif link.startswith("/"):
-                link = self.primary_base_domain / link[1:]
+                link = self.get_base_domain(scrape_item.url) / link[1:]
             link = URL(link)
 
-            if self.domain not in link.host:
+            if self.primary_base_domain.host not in link.host and self.secondary_base_domain.host not in link.host:
                 new_scrape_item = await self.create_scrape_item(scrape_item, link, "")
                 await self.handle_external_links(new_scrape_item)
             elif self.attachment_url_part in link.parts:
@@ -231,6 +241,8 @@ class SimpCityCrawler(Crawler):
 
             if link.startswith("//"):
                 link = "https:" + link
+            elif link.startswith("/"):
+                link = self.get_base_domain(scrape_item.url) / link[1:]
 
             link = URL(link)
             new_scrape_item = await self.create_scrape_item(scrape_item, link, "")
@@ -279,10 +291,10 @@ class SimpCityCrawler(Crawler):
             if link.startswith("//"):
                 link = "https:" + link
             elif link.startswith("/"):
-                link = self.primary_base_domain / link[1:]
+                link = self.get_base_domain(scrape_item.url) / link[1:]
             link = URL(link)
 
-            if self.domain not in link.host:
+            if self.primary_base_domain.host not in link.host and self.secondary_base_domain.host not in link.host:
                 new_scrape_item = await self.create_scrape_item(scrape_item, link, "")
                 await self.handle_external_links(new_scrape_item)
             elif self.attachment_url_part in link.parts:

@@ -40,7 +40,7 @@ class ScrapeMapper:
                         "postimg": self.postimg, "realbooru": self.realbooru, "reddit": self.reddit, 
                         "redd.it": self.reddit, "redgifs": self.redgifs, "rule34vault": self.rule34vault, "rule34.xxx": self.rule34xxx,
                         "rule34.xyz": self.rule34xyz, "saint": self.saint, "scrolller": self.scrolller,
-                        "simpcity": self.simpcity, "socialmediagirls": self.socialmediagirls, "toonily": self.toonily, 
+                        "simpcity": self.simpcity, "sexyforums": self.simpcity, "sexyforums.com": self.simpcity, "socialmediagirls": self.socialmediagirls, "toonily": self.toonily, 
                         "xbunker": self.xbunker, "xbunkr": self.xbunkr, "bunkr": self.bunkrr}
         self.existing_crawlers = {}
         self.no_crawler_downloader = Downloader(self.manager, "no_crawler")
@@ -235,6 +235,8 @@ class ScrapeMapper:
         """Creates a SimpCity Crawler instance"""
         from cyberdrop_dl.scraper.crawlers.simpcity_crawler import SimpCityCrawler
         self.existing_crawlers['simpcity'] = SimpCityCrawler(self.manager)
+        self.existing_crawlers['sexyforums'] = self.existing_crawlers['simpcity']
+        self.existing_crawlers['sexyforums.com'] = self.existing_crawlers['simpcity']
 
     async def socialmediagirls(self) -> None:
         """Creates a SocialMediaGirls Crawler instance"""
